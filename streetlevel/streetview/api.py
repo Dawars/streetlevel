@@ -1,4 +1,6 @@
+import json
 import aiohttp
+import requests
 from typing import Tuple
 from .protobuf import *
 from .util import is_third_party_panoid
@@ -21,7 +23,7 @@ def build_coverage_tile_request_url(tile_x, tile_y):
     return url
 
 
-def build_find_panorama_request_url(lat, lon, radius, download_depth, locale, search_third_party):
+def build_find_panorama_request_body(lat, lon, radius, download_depth, locale, search_third_party):
     radius = float(radius)
     toggles = []
     include_resolution_info = True
@@ -67,7 +69,7 @@ def build_find_panorama_request_url(lat, lon, radius, download_depth, locale, se
             2: {1: ietf_lang, 2: ietf_country},
             9: {1: ProtobufEnum(2)},
             11: {
-                1: {1: ProtobufEnum(image_type), 2: True, 3: ProtobufEnum(2)}
+                1: [{1: ProtobufEnum(image_type), 2: True, 3: ProtobufEnum(2)}]
             },
         },
         4: {
@@ -77,10 +79,7 @@ def build_find_panorama_request_url(lat, lon, radius, download_depth, locale, se
         }
     }
 
-    url = "https://maps.googleapis.com/maps/api/js/GeoPhotoService.SingleImageSearch?pb=" \
-          + to_protobuf_url(search_message) + "&callback=_xdc_._v2mub5"
-          
-    return url
+    return json.dumps(to_jspb(search_message))
 
 
 def build_find_panorama_by_id_request_url(panoid, download_depth, locale):
@@ -164,27 +163,34 @@ def build_find_panorama_by_id_request_url(panoid, download_depth, locale):
     return url
 
 
-def repair_find_panorama_response(text):
-    first_paren = text.index("(")
-    last_paren = text.rindex(")")
-    return "[" + text[first_paren + 1:last_paren] + "]"
+# The old GeoPhotoService.SingleImageSearch JSONP endpoint has been turned down;
+# the Maps JS API now sends the same message as a gRPC-web call.
+FIND_PANORAMA_URL = "https://maps.googleapis.com/$rpc/google.internal.maps.mapsjs.v1.MapsJsInternalService/SingleImageSearch"
+FIND_PANORAMA_HEADERS = {
+    "Content-Type": "application/json+protobuf",
+    "X-User-Agent": "grpc-web-javascript/0.1",
+}
 
 
 def find_panorama(lat, lon, radius=50, download_depth=False, locale="en", search_third_party=False, session=None):
-    return get_json(
-        build_find_panorama_request_url(lat, lon, radius, download_depth, locale, search_third_party),
-        session=session,
-        preprocess_function=repair_find_panorama_response
-    )
+    requester = session if session else requests
+    response = requester.post(
+        FIND_PANORAMA_URL,
+        data=build_find_panorama_request_body(lat, lon, radius, download_depth, locale, search_third_party),
+        headers=FIND_PANORAMA_HEADERS)
+    response.raise_for_status()
+    # wrapped in a list to match the structure of the old JSONP response
+    return [response.json()]
 
 
 async def find_panorama_async(lat, lon, session: aiohttp.ClientSession, radius=50,
                               download_depth=False, locale="en", search_third_party=False):
-    return await get_json_async(
-        build_find_panorama_request_url(lat, lon, radius, download_depth, locale, search_third_party),
-        session,
-        preprocess_function=repair_find_panorama_response
-    )
+    async with session.post(
+            FIND_PANORAMA_URL,
+            data=build_find_panorama_request_body(lat, lon, radius, download_depth, locale, search_third_party),
+            headers=FIND_PANORAMA_HEADERS) as response:
+        response.raise_for_status()
+        return [json.loads(await response.text())]
 
 
 def find_panorama_by_id(panoid, download_depth=False, locale="en", session=None):

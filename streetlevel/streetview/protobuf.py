@@ -35,6 +35,25 @@ def to_protobuf_url(fields):
     return _to_protobuf_url(fields)[1]
 
 
+def to_jspb(fields):
+    """
+    Serializes a message to the JSON array format ("JSPB") used by Google's gRPC-web endpoints,
+    where field n is stored at index n-1.
+    """
+    if isinstance(fields, dict):
+        array = [None] * max(fields.keys(), default=0)
+        for tag, value in fields.items():
+            array[tag - 1] = to_jspb(value)
+        return array
+    elif isinstance(fields, list):
+        return [to_jspb(entry) for entry in fields]
+    elif isinstance(fields, ProtobufEnum):
+        return fields.value
+    elif isinstance(fields, Decimal):
+        return float(fields)
+    return fields
+
+
 def _to_protobuf_url(fields):
     serialized = ""
     child_count = 0
